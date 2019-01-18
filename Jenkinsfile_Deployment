@@ -1,0 +1,362 @@
+/*
+ * @file: Jenkinsfile_Deployment
+ * @brief: Jenkins sequencing pipeline for s3 alps/aegis -ui
+ * @author:Balaji O
+ * @created:17-01-2019
+ * @modified: AA
+ */
+
+//[LIBRARIES]
+//@Library(['tpam-shared-library']) _
+import groovy.io.FileType.*;
+
+_nodeOs  = "";
+_linux   = "LINUX";
+_windows = "WIN";
+
+/*[PARAMS]*/
+_gitPipelineRepository          = PipelineRepository;
+_gitPipelineRepositoryBranch    = PipelineBranch;
+_exe				= Exe;
+_nodeLabel			= BuildNode;
+
+/*[GIT]*/
+//_gitScriptRepository            =   "github.aig.net/commercial-it-config/S3-vb6-devcicd.git"; 
+//_gitScriptRepositoryBranch      =   "master"
+_gitPipelineRepositoryFolder    =   "common\\ui"
+//_gitProjectRepository           =   "";
+//_gitProjectRepositoryBranchName =   "";
+
+/*[STAGES]*/
+_stageArray = [:];
+
+/*[STATES]*/
+_success    =  "SUCCESS";
+_failure    =  "FAILURE";
+_notStarted =  "NOT STARTED";
+_unstable   =  "UNSTABLE";
+
+/*[MISC]*/
+_dirPipelineRepo      =  "pipeline-dir";
+_dirPackageRepo       =  "package-dir";
+_dirScriptRepo        =  "script-dir";
+_pipelinePropertyFile =  "pipeline.properties";
+_pipelineProps        =  "";
+_commonUtils          =  "";
+_prodBuildNumber      = "";
+
+
+//UNICODE
+_unicodeAnchor  = "\u2693";
+_unicodePoints  = "\u27A1";
+_unicodeInfo    = "\u273F";
+_unicodeSuccess = "\u2714";
+_unicodeError   = "\u2716";
+
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+                                        /*NODE*/
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+node(_nodeLabel) {
+    try 
+    {
+        deleteDir();
+
+        init();
+
+        execute();
+    }
+    catch(Exception e) {
+        println e.getMessage();
+        println e;
+        throw e;
+    }
+    finally {
+        deleteDir();
+    }   
+}
+
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+                                        /*INITIALIZE*/
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+def init()
+ {
+    try 
+    {
+        _nodeOs = isUnix() ? _linux : _windows;
+        
+        //initialize utilities: get common pipeline utilities
+        clonerepo(_nodeOs, "github.aig.net/commercial-it-devops/pipeline-utilities.git", "master", "");
+        _commonUtils = load "./pipeline-utilities/common.groovy";
+
+       // executeCommand("mkdir ${_dirPackageRepo}");
+       // executeCommand("mkdir ${_dirScriptRepo}");
+
+        initStages();
+        
+        _commonUtils.prepareStages(_stageCheckoutPipeline,_stageExeDeployment);
+
+        initMessages();
+    }
+    catch(Exception e) {
+        println "${_unicodeError} Error occurred during initialization";
+        throw e;
+    }
+ }
+
+def initStages()
+{
+    _stageCheckoutPipeline  =   "Checkout Pipeline";
+    _stageExeDeployment     =   "Exe Deployment";
+ 
+}
+
+/*[MESSAGES]*/
+def initMessages()
+{
+    //Checkout-Pipeline
+    _messageCheckoutPipelineStart       =   "${_unicodePoints} Checking out build Props...";
+    _messageCheckoutPipelineFinished    =   "${_unicodeInfo} Checkout of build Props completed.";
+    _errorMessagePipeleineCheckout      =   "${_unicodeError} Error during checkout of build props.";
+
+	//Exe Deployment
+    
+    _messageDeploymentStart             =   "${_unicodePoints} Deployment started.";
+    _messageDeploymentFinish            =   "${_unicodeInfo} Deployment completed.";
+    _errorMessageDeployment             =   "${_unicodeError} Error while deploying the exe.";
+    
+    //Checkout-complete
+    _messageCheckoutStageFinished       =   "Checkout stage completed.";
+
+}
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+                                        /*EXECUTE*/
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+def execute()
+{   
+    def stageDifferentiator = "\n================================================================================\n"
+
+    println("${stageDifferentiator}${_unicodeAnchor} Running on ${_nodeOs} node.");
+
+    try 
+    {
+        /**CHECKOUT-PIPELINE**/
+        stage(_stageCheckoutPipeline)
+        {
+            setCurrentStage(_stageCheckoutPipeline);
+            runCheckoutPipeline();
+            _stageArray.put(_stageCheckoutPipeline,_success);
+        }
+        println "${stageDifferentiator}"
+
+       
+        /**EXE Deployment**/
+
+        stage(_stageExeDeployment)
+        {
+        setCurrentStage(_stageExeDeployment);
+	    println "Servers list: ${_servers}"
+	    if (_servers != "") {
+            println "Servers list: ${_servers}"
+            servers = _servers.split(",").toList()
+            servers.each {
+                runDeployment(it);
+            }
+            
+            for(String server:''.split(",")){
+                
+            }
+            _stageArray.put(_stageExeDeployment,_success);
+	    } else{
+	    println "No DEV Machines are defined"
+	    }
+        }
+        println "${stageDifferentiator}"
+
+    }
+    catch(Exception e) 
+    {
+        throw e;
+    }
+}
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+                                        /*CHECKOUT-PIPELINE*/
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+def runCheckoutPipeline()
+{
+    try 
+    {
+        println _messageCheckoutPipelineStart;
+
+    //    dir(_dirScriptRepo){
+    //        clonerepo(_nodeOs, _gitScriptRepository, _gitScriptRepositoryBranch, ".");
+    //    }
+
+        dir(_dirPipelineRepo)
+        {
+
+            clonerepo(_nodeOs, _gitPipelineRepository, _gitPipelineRepositoryBranch, ".");
+
+            //print files to console
+            bat "dir";
+
+            //read property file
+            _pipelineProps = readProperties file: "$_gitPipelineRepositoryFolder\\$_pipelinePropertyFile";
+
+            initializePipelineProperties();
+        }
+
+        println _messageCheckoutPipelineFinished;
+    }
+    catch(Exception e) 
+    {
+        println _errorMessagePipeleineCheckout;
+        _stageArray.put(_stageCheckoutPipeline,_failure);
+        throw e;
+    }   
+}
+
+def initializePipelineProperties()
+{
+    //git
+    //_gitProjectRepository   = _pipelineProps.GIT_REPO;
+    //_gitProjectRepositoryBranchName = _pipelineProps.GIT_BRANCH;
+    
+    //build
+    _buildFileName          = _pipelineProps.BUILD_FILE_NAME
+
+     //misc
+    _dirProjectRepo         = "C:\\Temp\\build";    
+    _loggingFolder          =  "C:\\Temp\\vblogs"; 
+    _servers                =  _pipelineProps.DEVMACHINES;
+    _sharedpath             =  _pipelineProps.SHAREDFOLDERPATH;
+       
+
+    println "${_unicodeInfo} Properties retrieved.."
+   // println "GIT_REPO                   : ${_gitProjectRepository}";
+   // println "GIT_BRANCH                 : ${_gitProjectRepositoryBranchName}";
+    println "\n================================================================================\n"
+    println "DEV_BOX                    : ${_servers}"
+    println "SHARED FOLDER PATH         : ${_sharedpath}"
+    println "\n================================================================================\n"
+
+    
+}
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+                                        /*DEPLOYMENT/
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+
+def runDeployment(server)
+{
+    try 
+    {
+        println _messageDeploymentStart;
+
+        dir(_dirProjectRepo)
+        {
+            
+                 copyFilesToDevbox(server);
+            
+        }
+
+        println _messageDeploymentFinish;
+    }
+    catch(Exception e) 
+    {
+        println _errorMessageDeployment;
+        _stageArray.put(_stageExeDeployment,_failure);
+        throw e;
+    }
+} 
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+                                        /*UTILS*/
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+/*Capture the current build stage in CURRENT_STAGE environment variable*/
+def setCurrentStage(String currentStage)
+{
+    env.CURRENT_STAGE =  currentStage;
+}
+
+/*executes shell or bat command. 
+* commands should be similar*/
+def executeCommand(String cmdStr)
+{
+    try 
+    {
+        if(_nodeOs == _windows)
+            bat "${cmdStr}";
+        else
+            sh "${cmdStr}";
+    }
+    catch(Exception e) 
+    {
+        println "${_unicodeError} Error occurred while executing command";
+        throw e;
+    }
+}
+
+def clonerepo(nodeOs, gitRepo, branchName, folder)
+{
+    try
+    {
+        withCredentials([string(credentialsId: 'comm_git_clone_token', variable: 'comm_git_clone_token')])
+        {
+            if(nodeOs == 'WIN') 
+            {
+                bat "git clone -b ${branchName} https://${comm_git_clone_token}@${gitRepo} ${folder}";  
+            }
+            else
+            {
+                sh "scl enable rh-git29 -- git clone -b ${branchName} https://${comm_git_clone_token}@${gitRepo}";
+            }
+        }
+        println "Cloned repo - ${gitRepo}, branch - ${branchName}";
+    }
+    catch(Exception e)
+    {
+        println "Failed to clone repo - ${gitRepo}";
+        throw e;
+    }
+}
+
+def copyFilesToDevbox(server)
+{           
+                            
+            withEnv(["SERVER=${server}","SHAREDPATH=${_sharedpath}","EXEZIPFILE=${_exe}", "PROJECTREPO=${_dirProjectRepo}", "LOGGINGFOLDER=${_loggingFolder}"]) 
+                        {
+                            
+                            print "${server}"
+                            powershell '''
+                            $ErrorActionPreference = "Stop"
+                            try
+                            {
+                            $Source = "$env:PROJECTREPO\\$env:EXEZIPFILE"
+                            $server = "$env:SERVER"
+                            $destination = "$env:SHAREDPATH"
+                            Write-Output "Files to copy paths: $env:SHAREDPATH"
+                            Write-Output "Executable file full path is $env:PROJECTREPO\\$env:EXEZIPFILE"
+                            Write-Output "server name is $server"
+                            if ((Test-Path -Path \\\\$server\\$destination)) {
+                            Copy-Item -Path $Source -Destination \\\\$server\\$destination
+                            Write-Output "copying completed "
+                            } else {
+                            Write-Output "\\\\$server\\$destination is not reachable or does not exist"
+                            Write-Error "Access denied or shared folder doesnot exist"
+                            }
+                            } 
+                            catch
+                            {
+                            $ErrorMessage = $_.Exception.Message
+                            $FailedItem   = $_.Exception.ItemName
+                            $logMessage = Write-Output "Error: failed to read file $FailedItem. The error message was $ErrorMessage"
+                            Out-File -FilePath "$env:LOGGINGFOLDER\\copyingErrors.log" -Append -InputObject $logMessage
+                            }
+                            '''
+                        }
+                        
+   } 
